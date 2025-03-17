@@ -18,7 +18,12 @@ from typing_extensions import override
 
 from aws_lambda_powertools.event_handler import content_types
 from aws_lambda_powertools.event_handler.exceptions import NotFoundError, ServiceError
-from aws_lambda_powertools.event_handler.openapi.constants import DEFAULT_API_VERSION, DEFAULT_OPENAPI_VERSION
+from aws_lambda_powertools.event_handler.openapi.config import OpenAPIConfig
+from aws_lambda_powertools.event_handler.openapi.constants import (
+    DEFAULT_API_VERSION,
+    DEFAULT_OPENAPI_TITLE,
+    DEFAULT_OPENAPI_VERSION,
+)
 from aws_lambda_powertools.event_handler.openapi.exceptions import (
     RequestValidationError,
     ResponseValidationError,
@@ -1537,6 +1542,7 @@ class ApiGatewayResolver(BaseRouter):
         self.context: dict = {}  # early init as customers might add context before event resolution
         self.processed_stack_frames = []
         self._response_builder_class = ResponseBuilder[BaseProxyEvent]
+        self.openapi_config = OpenAPIConfig()  # starting an empty dataclass
         self._has_response_validation_error = response_validation_error_http_code is not None
         self._response_validation_error_http_code = self._validate_response_validation_error_http_code(
             response_validation_error_http_code,
@@ -1580,16 +1586,12 @@ class ApiGatewayResolver(BaseRouter):
                 msg = f"'{response_validation_error_http_code}' must be an integer representing an HTTP status code."
                 raise ValueError(msg) from None
 
-        return (
-            response_validation_error_http_code
-            if response_validation_error_http_code
-            else HTTPStatus.UNPROCESSABLE_ENTITY
-        )
+        return response_validation_error_http_code or HTTPStatus.UNPROCESSABLE_ENTITY
 
     def get_openapi_schema(
         self,
         *,
-        title: str = "Powertools API",
+        title: str = DEFAULT_OPENAPI_TITLE,
         version: str = DEFAULT_API_VERSION,
         openapi_version: str = DEFAULT_OPENAPI_VERSION,
         summary: str | None = None,
@@ -1640,6 +1642,29 @@ class ApiGatewayResolver(BaseRouter):
         OpenAPI: pydantic model
             The OpenAPI schema as a pydantic model.
         """
+
+        # DEPRECATION: Will be removed in v4.0.0. Use configure_api() instead.
+        # Maintained for backwards compatibility.
+        # See: https://github.com/aws-powertools/powertools-lambda-python/issues/6122
+        if title == DEFAULT_OPENAPI_TITLE and self.openapi_config.title:
+            title = self.openapi_config.title
+
+        if version == DEFAULT_API_VERSION and self.openapi_config.version:
+            version = self.openapi_config.version
+
+        if openapi_version == DEFAULT_OPENAPI_VERSION and self.openapi_config.openapi_version:
+            openapi_version = self.openapi_config.openapi_version
+
+        summary = summary or self.openapi_config.summary
+        description = description or self.openapi_config.description
+        tags = tags or self.openapi_config.tags
+        servers = servers or self.openapi_config.servers
+        terms_of_service = terms_of_service or self.openapi_config.terms_of_service
+        contact = contact or self.openapi_config.contact
+        license_info = license_info or self.openapi_config.license_info
+        security_schemes = security_schemes or self.openapi_config.security_schemes
+        security = security or self.openapi_config.security
+        openapi_extensions = openapi_extensions or self.openapi_config.openapi_extensions
 
         from aws_lambda_powertools.event_handler.openapi.compat import (
             GenerateJsonSchema,
@@ -1739,7 +1764,7 @@ class ApiGatewayResolver(BaseRouter):
 
         # If the 'servers' property is not provided or is an empty array,
         # the default behavior is to return a Server Object with a URL value of "/".
-        return servers if servers else [Server(url="/")]
+        return servers or [Server(url="/")]
 
     @staticmethod
     def _get_openapi_security(
@@ -1771,7 +1796,7 @@ class ApiGatewayResolver(BaseRouter):
     def get_openapi_json_schema(
         self,
         *,
-        title: str = "Powertools API",
+        title: str = DEFAULT_OPENAPI_TITLE,
         version: str = DEFAULT_API_VERSION,
         openapi_version: str = DEFAULT_OPENAPI_VERSION,
         summary: str | None = None,
@@ -1822,6 +1847,7 @@ class ApiGatewayResolver(BaseRouter):
         str
             The OpenAPI schema as a JSON serializable dict.
         """
+
         from aws_lambda_powertools.event_handler.openapi.compat import model_json
 
         return model_json(
@@ -1845,11 +1871,94 @@ class ApiGatewayResolver(BaseRouter):
             indent=2,
         )
 
+    def configure_openapi(
+        self,
+        title: str = DEFAULT_OPENAPI_TITLE,
+        version: str = DEFAULT_API_VERSION,
+        openapi_version: str = DEFAULT_OPENAPI_VERSION,
+        summary: str | None = None,
+        description: str | None = None,
+        tags: list[Tag | str] | None = None,
+        servers: list[Server] | None = None,
+        terms_of_service: str | None = None,
+        contact: Contact | None = None,
+        license_info: License | None = None,
+        security_schemes: dict[str, SecurityScheme] | None = None,
+        security: list[dict[str, list[str]]] | None = None,
+        openapi_extensions: dict[str, Any] | None = None,
+    ):
+        """Configure OpenAPI specification settings for the API.
+
+        Sets up the OpenAPI documentation configuration that can be later used
+        when enabling Swagger UI or generating OpenAPI specifications.
+
+        Parameters
+        ----------
+        title: str
+            The title of the application.
+        version: str
+            The version of the OpenAPI document (which is distinct from the OpenAPI Specification version or the API
+        openapi_version: str, default = "3.0.0"
+            The version of the OpenAPI Specification (which the document uses).
+        summary: str, optional
+            A short summary of what the application does.
+        description: str, optional
+            A verbose explanation of the application behavior.
+        tags: list[Tag, str], optional
+            A list of tags used by the specification with additional metadata.
+        servers: list[Server], optional
+            An array of Server Objects, which provide connectivity information to a target server.
+        terms_of_service: str, optional
+            A URL to the Terms of Service for the API. MUST be in the format of a URL.
+        contact: Contact, optional
+            The contact information for the exposed API.
+        license_info: License, optional
+            The license information for the exposed API.
+        security_schemes: dict[str, SecurityScheme]], optional
+            A declaration of the security schemes available to be used in the specification.
+        security: list[dict[str, list[str]]], optional
+            A declaration of which security mechanisms are applied globally across the API.
+        openapi_extensions: Dict[str, Any], optional
+            Additional OpenAPI extensions as a dictionary.
+
+        Example
+        --------
+        >>> api.configure_openapi(
+        ...     title="My API",
+        ...     version="1.0.0",
+        ...     description="API for managing resources",
+        ...     contact=Contact(
+        ...         name="API Support",
+        ...         email="support@example.com"
+        ...     )
+        ... )
+
+        See Also
+        --------
+        enable_swagger : Method to enable Swagger UI using these configurations
+        OpenAPIConfig : Data class containing all OpenAPI configuration options
+        """
+        self.openapi_config = OpenAPIConfig(
+            title=title,
+            version=version,
+            openapi_version=openapi_version,
+            summary=summary,
+            description=description,
+            tags=tags,
+            servers=servers,
+            terms_of_service=terms_of_service,
+            contact=contact,
+            license_info=license_info,
+            security_schemes=security_schemes,
+            security=security,
+            openapi_extensions=openapi_extensions,
+        )
+
     def enable_swagger(
         self,
         *,
         path: str = "/swagger",
-        title: str = "Powertools for AWS Lambda (Python) API",
+        title: str = DEFAULT_OPENAPI_TITLE,
         version: str = DEFAULT_API_VERSION,
         openapi_version: str = DEFAULT_OPENAPI_VERSION,
         summary: str | None = None,
@@ -1912,6 +2021,7 @@ class ApiGatewayResolver(BaseRouter):
         openapi_extensions: dict[str, Any], optional
             Additional OpenAPI extensions as a dictionary.
         """
+
         from aws_lambda_powertools.event_handler.openapi.compat import model_json
         from aws_lambda_powertools.event_handler.openapi.models import Server
         from aws_lambda_powertools.event_handler.openapi.swagger_ui import (
@@ -2156,10 +2266,7 @@ class ApiGatewayResolver(BaseRouter):
     @staticmethod
     def _has_debug(debug: bool | None = None) -> bool:
         # It might have been explicitly switched off (debug=False)
-        if debug is not None:
-            return debug
-
-        return powertools_dev_is_set()
+        return debug if debug is not None else powertools_dev_is_set()
 
     @staticmethod
     def _compile_regex(rule: str, base_regex: str = _ROUTE_REGEX):
@@ -2272,7 +2379,7 @@ class ApiGatewayResolver(BaseRouter):
         if not isinstance(prefix, str) or prefix == "":
             return False
 
-        return path.startswith(prefix + "/")
+        return path.startswith(f"{prefix}/")
 
     def _handle_not_found(self, method: str, path: str) -> ResponseBuilder:
         """Called when no matching route was found and includes support for the cors preflight response"""
@@ -2543,8 +2650,9 @@ class ApiGatewayResolver(BaseRouter):
             if route.dependant.response_extra_models:
                 responses_from_routes.extend(route.dependant.response_extra_models)
 
-        flat_models = list(responses_from_routes + request_fields_from_routes + body_fields_from_routes)
-        return flat_models
+        return list(
+            responses_from_routes + request_fields_from_routes + body_fields_from_routes,
+        )
 
 
 class Router(BaseRouter):
