@@ -16,6 +16,8 @@ from aws_lambda_powertools.utilities.data_classes.shared_functions import base64
 
 
 class VPCLatticeEventBase(BaseProxyEvent):
+    # is_base64_encoded and path are inherited from BaseProxyEvent class.
+
     @property
     def body(self) -> str:
         """The VPC Lattice body."""
@@ -168,16 +170,6 @@ class VPCLatticeEventV2(VPCLatticeEventBase):
     def version(self) -> str:
         """The VPC Lattice v2 Event version"""
         return self["version"]
-
-    @property
-    def is_base64_encoded(self) -> bool | None:
-        """A boolean flag to indicate if the applicable request payload is Base64-encode"""
-        return self.get("isBase64Encoded")
-
-    @property
-    def path(self) -> str:
-        """The VPC Lattice v2 Event path"""
-        return self["path"]
 
     @property
     def request_context(self) -> vpcLatticeEventV2RequestContext:
